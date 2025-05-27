@@ -5,5 +5,6 @@ pgm_file: '/path/to/maps/map.pgm'
 
 # Scaling factors & grid parameters
 scale: 10.0           # Upscale factor for human-readable maps
-zone_size: 17         # Grid size (pixels) for zone segmentation
+zone_size: 13         # Grid size (pixels) for zone segmentation
 free_threshold: 250   # Pixel value >= this is treated as free space
+obstacle_buffer: 0.1  # meters

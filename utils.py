@@ -130,7 +130,8 @@ def load_measurements(yaml_path: str):
     with open(yaml_path, 'r') as f:
         data = yaml.safe_load(f)
     measurements_list = data.get('measurements', [])
-    return {e['zone']: e['power'] for e in measurements_list}
+    #return {e['zone']: e['power'] for e in measurements_list}
+    return {e['zone']: (e['power'] if e['power'] is not None else np.nan) for e in measurements_list}
 
 
 def generate_zones(
@@ -138,31 +139,59 @@ def generate_zones(
     zone_size: int,
     free_threshold: int,
     resolution: float,
-    origin: tuple
+    origin: tuple,
+    obstacle_buffer: float = 0.0,
+    avoid_near_obstacles: bool = False
 ):
     """
     Partition the occupancy image into free-space zones.
-    Returns lists of boxes and centroids in world coords.
+    
+    If `avoid_near_obstacles` is True, zones within 50 cm of any obstacle
+    (black or gray pixel) are excluded. Otherwise, only free space check is applied.
+
+    Returns:
+        zones: List of (x0, y0, x1, y1) pixel boxes
+        cents: List of (cx, cy) zone centroids in world coordinates
     """
     h, w = img.shape
+    margin_px = int(obstacle_buffer / resolution) if avoid_near_obstacles else 0
     zones, cents = [], []
+
     for y0 in range(0, h, zone_size):
         for x0 in range(0, w, zone_size):
             y1 = min(y0 + zone_size, h)
             x1 = min(x0 + zone_size, w)
             patch = img[y0:y1, x0:x1]
+
+            # Only proceed if the patch contains free space
             if np.any(patch >= free_threshold):
                 ys, xs = np.where(patch >= free_threshold)
                 x0n, x1n = x0 + xs.min(), x0 + xs.max() + 1
                 y0n, y1n = y0 + ys.min(), y0 + ys.max() + 1
-                zones.append((x0n, y0n, x1n, y1n))
+
+                if avoid_near_obstacles:
+                    check_x0 = max(0, x0n - margin_px)
+                    check_y0 = max(0, y0n - margin_px)
+                    check_x1 = min(w, x1n + margin_px)
+                    check_y1 = min(h, y1n + margin_px)
+                    danger_patch = img[check_y0:check_y1, check_x0:check_x1]
+
+                    # Skip zone if any pixel in margin is not free
+                    if np.any(danger_patch < free_threshold):
+                        continue
+
+                # Compute world-space centroid
                 cx_px = int(xs.mean()) + x0
                 cy_px = int(ys.mean()) + y0
                 cx_w = cx_px * resolution + origin[0]
                 cy_w = (h - cy_px) * resolution + origin[1]
+                zones.append((x0n, y0n, x1n, y1n))
                 cents.append((cx_w, cy_w))
+
     return zones, cents
-    
+
+
+
 def generate_heatmap(
     orig_img, measurements_dict, centroid_dict, origin, resolution, scale,
     zone_size_factor=30, free_threshold=250, decay=1.0, num_iters=100
@@ -180,7 +209,7 @@ def generate_heatmap(
     # Initialize measurement per zone
     zone_measurements = []
     for (zwx, zwy) in zone_centroids:
-        val = 0.0
+        val = np.nan
         zx = int((zwx - origin[0]) / resolution)
         zy = int(orig_img.shape[0] - ((zwy - origin[1]) / resolution))
         for idx, (cx, cy) in centroid_dict.items():
@@ -194,7 +223,7 @@ def generate_heatmap(
         zone_measurements.append(val)
 
     zone_measurements = np.array(zone_measurements, dtype=np.float32)
-    known = zone_measurements > 0
+    known = ~np.isnan(zone_measurements)
 
     # Diffusion without early break
     for _ in range(num_iters):
@@ -206,12 +235,16 @@ def generate_heatmap(
             for j, (xx0, yy0, xx1, yy1) in enumerate(zones):
                 if i == j:
                     continue
-                if not (x1 < xx0 or x0 > xx1 or y1 < yy0 or y0 > yy1):
+                if not (x1 < xx0 or x0 > xx1 or y1 < yy0 or y0 > yy1) and not np.isnan(zone_measurements[j]):
                     neigh.append(zone_measurements[j])
+                    
             if neigh:
                 new[i] = decay * np.mean(neigh)
         zone_measurements = new
 
+    valid_vals = zone_measurements[~np.isnan(zone_measurements)]
+    if valid_vals.size > 0 and valid_vals.max() > 0:
+        zone_measurements /= valid_vals.max()
     # Normalize values
     if zone_measurements.max() > 0:
         zone_measurements /= zone_measurements.max()

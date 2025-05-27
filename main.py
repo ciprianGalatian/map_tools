@@ -41,6 +41,7 @@ def main():
     map_yaml = cfg['map_yaml']
     pgm_file = cfg['pgm_file']
     scale = cfg['scale']
+    obstacle_buffer = cfg['obstacle_buffer']
     native_scale = 1
     native_zone_size = int(cfg['zone_size'] * native_scale)
     scaled_zone_size = int(cfg['zone_size'] * scale)
@@ -98,7 +99,7 @@ def main():
         output_img = script_folder /'native_maps'/ 'zones_overlay.png'
         zones, cents = generate_zones(
             img, native_zone_size, free_threshold,
-            resolution, origin
+            resolution, origin, obstacle_buffer, avoid_near_obstacles = True
         )
         save_waypoints_yaml(cents, output_yaml, resolution, origin)
         overlay_zones_on_map(
@@ -115,12 +116,12 @@ def main():
             raise FileNotFoundError(f"Cannot open map image: {native_raw_png}")
         zones, cents = generate_zones(
             img, scaled_zone_size, free_threshold,
-            resolution, origin
+            resolution/scale, origin, obstacle_buffer, avoid_near_obstacles = True
         )
         overlay_zones_on_map(
             img, output_img,
             scaled_zone_size, origin,
-            resolution, scale,
+            resolution/scale, scale,
             'zones', zones=zones, centroids=cents
         )
 

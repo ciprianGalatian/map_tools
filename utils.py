@@ -194,14 +194,14 @@ def generate_zones(
 
 def generate_heatmap(
     orig_img, measurements_dict, centroid_dict, origin, resolution, scale,
-    zone_size_factor=30, free_threshold=250, decay=1.0, num_iters=100
+    zone_size_factor=15, free_threshold=250, decay=1.0, num_iters=200
 ):
     """
     Generate a heatmap by clustering the map into zones and diffusing known measurement values.
     """
     # Convert image to grayscale
     gray_map = cv2.cvtColor(orig_img, cv2.COLOR_BGR2GRAY) if orig_img.ndim == 3 else orig_img.copy()
-
+    omega=1.5  # Relaxation factor, must be >1.0 and <2.0
     # Cluster into zones and get centroids
     zone_size = int(zone_size_factor)
     zones, zone_centroids = generate_zones(gray_map, zone_size, free_threshold, resolution, origin)
@@ -224,23 +224,31 @@ def generate_heatmap(
 
     zone_measurements = np.array(zone_measurements, dtype=np.float32)
     known = ~np.isnan(zone_measurements)
+    
+    # Initialize unknown zones to zero to help diffusion propagate values
+    zone_measurements[np.isnan(zone_measurements)] = 0.0
 
-    # Diffusion without early break
-    for _ in range(num_iters):
-        new = zone_measurements.copy()
-        for i, (x0, y0, x1, y1) in enumerate(zones):
-            if known[i]:
+    # Precompute neighbors for each zone
+    zone_neighbors = []
+    for i, (x0, y0, x1, y1) in enumerate(zones):
+        neigh = []
+        for j, (xx0, yy0, xx1, yy1) in enumerate(zones):
+            if i == j:
                 continue
-            neigh = []
-            for j, (xx0, yy0, xx1, yy1) in enumerate(zones):
-                if i == j:
-                    continue
-                if not (x1 < xx0 or x0 > xx1 or y1 < yy0 or y0 > yy1) and not np.isnan(zone_measurements[j]):
-                    neigh.append(zone_measurements[j])
-                    
-            if neigh:
-                new[i] = decay * np.mean(neigh)
-        zone_measurements = new
+            if not (x1 < xx0 or x0 > xx1 or y1 < yy0 or y0 > yy1):
+                neigh.append(j)
+        zone_neighbors.append(neigh)
+        
+    for _ in range(num_iters):
+        for i, neighbors in enumerate(zone_neighbors):
+            if known[i] or not neighbors:
+                continue
+            valid_vals = [zone_measurements[j] for j in neighbors if not np.isnan(zone_measurements[j])]
+            if valid_vals:
+                avg_neighbor = np.mean(valid_vals)
+                residual = avg_neighbor - zone_measurements[i]
+                zone_measurements[i] += omega * residual
+
 
     valid_vals = zone_measurements[~np.isnan(zone_measurements)]
     if valid_vals.size > 0 and valid_vals.max() > 0:

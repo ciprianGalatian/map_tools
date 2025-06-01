@@ -26,6 +26,8 @@ We built this to make environmental mapping easy for visualising EMF power radia
 | ![EnvB Raw](scaled_maps/raw_map_2.png) | ![EnvB Zones](scaled_maps/zones_overlay_2.png) | ![EnvB Heatmap](scaled_maps/heatmap_2.png) |
 
 ---
+### There is also a method for generating elevation heatmap as a .svg
+![Elevation heatmap](scaled_maps/Figure_1.svg)
 
 ## What’s Inside?
 Once your environment map is loaded, Map Tools gets to work by breaking it down into clean, navigable zones based on free-space detection. Each zone’s center point becomes a waypoint, helping with precise and autonomous robot navigation. After zones are ready, there are injected real-world measurements or simulated values like EMF readings, temperatures, or any custom data into each zone. The system intelligently diffuses the measurements across nearby zones using an iterative neighbor-averaging technique, smoothing out the map naturally, similar to how heat spreads through a surface. Finally, all the processed data is beautifully visualized on the original map, giving you an intuitive heatmap that tells a complete story of your environment at a glance.

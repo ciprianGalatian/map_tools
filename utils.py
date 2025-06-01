@@ -291,6 +291,124 @@ def generate_heatmap(
 
     return overlay
 
+def generate_elevation_heatmap(
+    orig_img, measurements_dict, centroid_dict, origin, resolution, scale,
+    zone_size_factor=15, free_threshold=250, decay=1.0, num_iters=200
+):
+    """
+    Generate a heatmap by clustering the map into zones and diffusing known measurement values.
+    """
+    # Convert image to grayscale
+    gray_map = cv2.cvtColor(orig_img, cv2.COLOR_BGR2GRAY) if orig_img.ndim == 3 else orig_img.copy()
+    omega = 1.5  # Relaxation factor, must be >1.0 and <2.0
+    
+    # Cluster into zones and get centroids
+    zone_size = int(zone_size_factor)
+    zones, zone_centroids = generate_zones(gray_map, zone_size, free_threshold, resolution, origin)
+
+    # Initialize measurement per zone
+    zone_measurements = []
+    for (zwx, zwy) in zone_centroids:
+        val = np.nan
+        zx = int((zwx - origin[0]) / resolution)
+        zy = int(orig_img.shape[0] - ((zwy - origin[1]) / resolution))
+        for idx, (cx, cy) in centroid_dict.items():
+            if idx in measurements_dict and measurements_dict[idx] is not None:
+                cx_px = int((cx - origin[0]) * scale / resolution)
+                cy_px = int(orig_img.shape[0] - ((cy - origin[1]) * scale / resolution))
+                dist = np.linalg.norm([zx - cx_px, zy - cy_px])
+                if dist < zone_size * 1.5:
+                    val = measurements_dict[idx]
+                    break
+        zone_measurements.append(val)
+
+    zone_measurements = np.array(zone_measurements, dtype=np.float32)
+    known = ~np.isnan(zone_measurements)
+
+    # Initialize unknown zones to zero to help diffusion propagate values
+    zone_measurements[np.isnan(zone_measurements)] = 0.0
+
+    # Precompute neighbors for each zone
+    zone_neighbors = []
+    for i, (x0, y0, x1, y1) in enumerate(zones):
+        neigh = []
+        for j, (xx0, yy0, xx1, yy1) in enumerate(zones):
+            if i == j:
+                continue
+            # Check if zones touch/intersect
+            if not (x1 < xx0 or x0 > xx1 or y1 < yy0 or y0 > yy1):
+                neigh.append(j)
+        zone_neighbors.append(neigh)
+
+    # Diffuse measurements into unknown zones using relaxation
+    for _ in range(num_iters):
+        for i, neighbors in enumerate(zone_neighbors):
+            if known[i] or not neighbors:
+                continue
+            valid_vals = [zone_measurements[j] for j in neighbors if not np.isnan(zone_measurements[j])]
+            if valid_vals:
+                avg_neighbor = np.mean(valid_vals)
+                residual = avg_neighbor - zone_measurements[i]
+                zone_measurements[i] += omega * residual
+
+    # Normalize zone measurements to [0,1]
+    valid_vals = zone_measurements[~np.isnan(zone_measurements)]
+    if valid_vals.size > 0 and valid_vals.max() > 0:
+        zone_measurements /= valid_vals.max()
+
+    # Create zone-based heatmap (float32)
+    heatmap_colored = np.zeros_like(gray_map, dtype=np.float32)
+    for (x0, y0, x1, y1), v in zip(zones, zone_measurements):
+        heatmap_colored[y0:y1, x0:x1] = v
+
+    # Normalize heatmap_colored for colormap
+    if heatmap_colored.max() > 0:
+        norm_map = heatmap_colored / heatmap_colored.max()
+    else:
+        norm_map = heatmap_colored
+
+    colormap = cm.get_cmap('gist_heat')
+    heat_img = (colormap(norm_map)[:, :, :3] * 255).astype(np.uint8)
+    heat_img_bgr = cv2.cvtColor(heat_img, cv2.COLOR_RGB2BGR)
+
+    # Blend zones with original image
+    base = cv2.cvtColor(orig_img, cv2.COLOR_GRAY2BGR) if orig_img.ndim == 2 else orig_img.copy()
+    blended = cv2.addWeighted(base, 0.4, heat_img_bgr, 0.6, 0)
+
+    # Define mask before use
+    mask = heatmap_colored > 0
+
+    # Apply mask to overlay blended zones on base
+    overlay = np.where(mask[:, :, None], blended, base)
+
+    # Force uint8 dtype for proper saving
+    overlay = overlay.astype(np.uint8)
+
+    # Draw measurement points
+    dark_purple = (64, 0, 128)
+    for idx, (cx, cy) in centroid_dict.items():
+        if idx not in measurements_dict or measurements_dict[idx] is None:
+            continue
+        px = int((cx - origin[0]) * scale / resolution)
+        py = int(orig_img.shape[0] - ((cy - origin[1]) * scale / resolution))
+        cv2.circle(overlay, (px, py), 5, dark_purple, -1)
+        cv2.putText(overlay, f"{measurements_dict[idx]:.1f}", (px + 5, py - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, dark_purple, 1)
+    # After computing zone_measurements and zones in your function
+    plot_3d_elevation(zones, zone_measurements)
+    save_elevation_map(elevation_map, "elevation_map.png")
+    return overlay
+
+def save_elevation_map(zones, zone_measurements, shape):
+    """
+    Create a grayscale elevation image from zones and measurements.
+    """
+    elevation_img = np.zeros(shape, dtype=np.float32)
+    for (x0, y0, x1, y1), val in zip(zones, zone_measurements):
+        elevation_img[y0:y1, x0:x1] = val
+    # Normalize to [0, 255]
+    elevation_img = (elevation_img / np.max(elevation_img) * 255).astype(np.uint8)
+    cv2.imwrite("elevation_map.png", elevation_img)
 
 def save_waypoints_yaml(centroids, output_path: Path, resolution: float, origin):
     wps=[]; ox,oy=origin[0],origin[1]
